@@ -566,7 +566,7 @@ public class FileTxnSnapLog {
      * file may contain transactions beyond given zxid.
      * @param zxid the zxid that contains logs greater than
      * zxid
-     * @return
+     * @return the snapshot logs which may contain transactions newer than the given zxid
      */
     public File[] getSnapshotLogs(long zxid) {
         return FileTxnLog.getLogFiles(dataDir.listFiles(), zxid);
@@ -611,14 +611,16 @@ public class FileTxnSnapLog {
      * @throws IOException
      */
     public void close() throws IOException {
-        if (txnLog != null) {
-            txnLog.close();
-            txnLog = null;
+        TxnLog txnLogToClose = txnLog;
+        if (txnLogToClose != null) {
+            txnLogToClose.close();
         }
-        if (snapLog != null) {
-            snapLog.close();
-            snapLog = null;
+        txnLog = null;
+        SnapShot snapSlogToClose = snapLog;
+        if (snapSlogToClose != null) {
+            snapSlogToClose.close();
         }
+        snapLog = null;
     }
 
     @SuppressWarnings("serial")

@@ -18,6 +18,7 @@
 
 package org.apache.zookeeper.server.quorum;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
@@ -93,7 +94,6 @@ public class Learner {
 
     /**
      * Socket getter
-     * @return
      */
     public Socket getSocket() {
         return sock;
@@ -571,7 +571,7 @@ public class Learner {
                 // ZOOKEEPER-2819: overwrite config node content extracted
                 // from leader snapshot with local config, to avoid potential
                 // inconsistency of config node content during rolling restart.
-                if (!QuorumPeerConfig.isReconfigEnabled()) {
+                if (!self.isReconfigEnabled()) {
                     LOG.debug("Reset config node content from local config after deserialization of snapshot.");
                     zk.getZKDatabase().initConfigInZKDatabase(self.getQuorumVerifier());
                 }
@@ -634,7 +634,7 @@ public class Learner {
 
                     if (pif.hdr.getType() == OpCode.reconfig) {
                         SetDataTxn setDataTxn = (SetDataTxn) pif.rec;
-                        QuorumVerifier qv = self.configFromString(new String(setDataTxn.getData()));
+                        QuorumVerifier qv = self.configFromString(new String(setDataTxn.getData(), UTF_8));
                         self.setLastSeenQuorumVerifier(qv, true);
                     }
 
@@ -644,7 +644,7 @@ public class Learner {
                 case Leader.COMMITANDACTIVATE:
                     pif = packetsNotCommitted.peekFirst();
                     if (pif.hdr.getZxid() == qp.getZxid() && qp.getType() == Leader.COMMITANDACTIVATE) {
-                        QuorumVerifier qv = self.configFromString(new String(((SetDataTxn) pif.rec).getData()));
+                        QuorumVerifier qv = self.configFromString(new String(((SetDataTxn) pif.rec).getData(), UTF_8));
                         boolean majorChange = self.processReconfig(
                             qv,
                             ByteBuffer.wrap(qp.getData()).getLong(), qp.getZxid(),
@@ -680,7 +680,7 @@ public class Learner {
                         packet.hdr = logEntry.getHeader();
                         packet.rec = logEntry.getTxn();
                         packet.digest = logEntry.getDigest();
-                        QuorumVerifier qv = self.configFromString(new String(((SetDataTxn) packet.rec).getData()));
+                        QuorumVerifier qv = self.configFromString(new String(((SetDataTxn) packet.rec).getData(), UTF_8));
                         boolean majorChange = self.processReconfig(qv, suggestedLeaderId, qp.getZxid(), true);
                         if (majorChange) {
                             throw new Exception("changes proposed in reconfig");
@@ -728,7 +728,7 @@ public class Learner {
                     LOG.info("Learner received NEWLEADER message");
                     if (qp.getData() != null && qp.getData().length > 1) {
                         try {
-                            QuorumVerifier qv = self.configFromString(new String(qp.getData()));
+                            QuorumVerifier qv = self.configFromString(new String(qp.getData(), UTF_8));
                             self.setLastSeenQuorumVerifier(qv, true);
                             newLeaderQV = qv;
                         } catch (Exception e) {
@@ -741,8 +741,22 @@ public class Learner {
                     }
 
                     self.setCurrentEpoch(newEpoch);
-                    writeToTxnLog = true; //Anything after this needs to go to the transaction log, not applied directly in memory
+                    writeToTxnLog = true;
+                    //Anything after this needs to go to the transaction log, not applied directly in memory
                     isPreZAB1_0 = false;
+
+                    // ZOOKEEPER-3911: make sure sync the uncommitted logs before commit them (ACK NEWLEADER).
+                    sock.setSoTimeout(self.tickTime * self.syncLimit);
+                    self.setSyncMode(QuorumPeer.SyncMode.NONE);
+                    zk.startupWithoutServing();
+                    if (zk instanceof FollowerZooKeeperServer) {
+                        FollowerZooKeeperServer fzk = (FollowerZooKeeperServer) zk;
+                        for (PacketInFlight p : packetsNotCommitted) {
+                            fzk.logRequest(p.hdr, p.rec, p.digest);
+                        }
+                        packetsNotCommitted.clear();
+                    }
+
                     writePacket(new QuorumPacket(Leader.ACK, newLeaderZxid, null, null), true);
                     break;
                 }
@@ -750,9 +764,7 @@ public class Learner {
         }
         ack.setZxid(ZxidUtils.makeZxid(newEpoch, 0));
         writePacket(ack, true);
-        sock.setSoTimeout(self.tickTime * self.syncLimit);
-        self.setSyncMode(QuorumPeer.SyncMode.NONE);
-        zk.startup();
+        zk.startServing();
         /*
          * Update the election vote here to ensure that all members of the
          * ensemble report the same vote to new servers that start up and
@@ -847,7 +859,9 @@ public class Learner {
         closeSocket();
         // shutdown previous zookeeper
         if (zk != null) {
-            zk.shutdown();
+            // If we haven't finished SNAP sync, force fully shutdown
+            // to avoid potential inconsistency
+            zk.shutdown(self.getSyncMode().equals(QuorumPeer.SyncMode.SNAP));
         }
     }
 

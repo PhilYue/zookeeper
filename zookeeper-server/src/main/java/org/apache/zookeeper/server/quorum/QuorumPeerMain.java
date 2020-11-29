@@ -34,6 +34,7 @@ import org.apache.zookeeper.server.ServerMetrics;
 import org.apache.zookeeper.server.ZKDatabase;
 import org.apache.zookeeper.server.ZooKeeperServerMain;
 import org.apache.zookeeper.server.admin.AdminServer.AdminServerException;
+import org.apache.zookeeper.server.auth.ProviderRegistry;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog.DatadirException;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
@@ -148,7 +149,7 @@ public class QuorumPeerMain {
             LOG.warn("Unable to register log4j JMX control", e);
         }
 
-        LOG.info("Starting quorum peer");
+        LOG.info("Starting quorum peer, myid=" + config.getServerId());
         MetricsProvider metricsProvider;
         try {
             metricsProvider = MetricsProviderBootstrap.startMetricsProvider(
@@ -159,6 +160,7 @@ public class QuorumPeerMain {
         }
         try {
             ServerMetrics.metricsProviderInitialized(metricsProvider);
+            ProviderRegistry.initialize();
             ServerCnxnFactory cnxnFactory = null;
             ServerCnxnFactory secureCnxnFactory = null;
 
@@ -244,6 +246,25 @@ public class QuorumPeerMain {
     // @VisibleForTesting
     protected QuorumPeer getQuorumPeer() throws SaslException {
         return new QuorumPeer();
+    }
+
+    /**
+     * Shutdowns properly the service, this method is not a public API.
+     */
+    public void close() {
+        if (quorumPeer != null) {
+            try {
+                quorumPeer.shutdown();
+            } finally {
+                quorumPeer = null;
+            }
+        }
+    }
+
+    @Override
+    public String toString() {
+        QuorumPeer peer = quorumPeer;
+        return peer == null ? "" : peer.toString();
     }
 
 }

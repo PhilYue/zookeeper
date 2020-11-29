@@ -18,6 +18,7 @@
 
 package org.apache.zookeeper.server.quorum;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.zookeeper.common.NetUtils.formatInetAddr;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -255,7 +256,7 @@ public class QuorumCnxManager {
 
             // in PROTOCOL_VERSION_V1 we expect to get a single address here represented as a 'host:port' string
             // in PROTOCOL_VERSION_V2 we expect to get multiple addresses like: 'host1:port1|host2:port2|...'
-            String[] addressStrings = new String(b).split("\\|");
+            String[] addressStrings = new String(b, UTF_8).split("\\|");
             List<InetSocketAddress> addresses = new ArrayList<>(addressStrings.length);
             for (String addr : addressStrings) {
 
@@ -1131,6 +1132,7 @@ public class QuorumCnxManager {
                 }
 
                 socket.setReuseAddress(true);
+                address = new InetSocketAddress(address.getHostString(), address.getPort());
                 socket.bind(address);
 
                 return socket;
@@ -1474,6 +1476,10 @@ public class QuorumCnxManager {
 
     public boolean connectedToPeer(long peerSid) {
         return senderWorkerMap.get(peerSid) != null;
+    }
+
+    public boolean isReconfigEnabled() {
+        return self.isReconfigEnabled();
     }
 
 }
